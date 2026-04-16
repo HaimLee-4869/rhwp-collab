@@ -1,0 +1,3 @@
+[submodule "rhwp"]
+	path = rhwp
+	url = https://github.com/HaimLee-4869/rhwp.git
