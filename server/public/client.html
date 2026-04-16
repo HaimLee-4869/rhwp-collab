@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>rHWP 동시편집</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; height: 100vh; display: flex; flex-direction: column; }
+    
+    /* 상단 상태바 */
+    #status-bar {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 8px 16px;
+      background: #2d3748;
+      color: white;
+      font-size: 14px;
+    }
+    #status-bar .label { opacity: 0.7; }
+    #ws-status { display: inline-flex; align-items: center; gap: 4px; }
+    #ws-status::before {
+      content: '';
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #48bb78;
+    }
+    #ws-status.disconnected::before { background: #f56565; }
+    #ws-status.connecting::before { background: #ed8936; }
+    #user-list { 
+      margin-left: auto; 
+      display: flex; 
+      gap: 6px; 
+    }
+    .user-chip {
+      padding: 2px 8px;
+      background: #4a5568;
+      border-radius: 10px;
+      font-size: 12px;
+    }
+    .user-chip.me { background: #3182ce; }
+    
+    /* iframe 영역 */
+    #editor-frame {
+      flex: 1;
+      border: none;
+      width: 100%;
+    }
+    
+    /* 디버그 로그 (토글 가능) */
+    #log-panel {
+      max-height: 150px;
+      overflow-y: auto;
+      background: #1a202c;
+      color: #a0aec0;
+      font-family: monospace;
+      font-size: 11px;
+      padding: 4px 8px;
+      border-top: 1px solid #4a5568;
+      display: none;
+    }
+    #log-panel.visible { display: block; }
+    .log-entry { margin: 1px 0; }
+    .log-entry.send { color: #68d391; }
+    .log-entry.recv { color: #63b3ed; }
+    .log-entry.err { color: #fc8181; }
+  </style>
+</head>
+<body>
+  <div id="status-bar">
+    <span>📝 rHWP 동시편집</span>
+    <span><span class="label">방:</span> <span id="room-id">-</span></span>
+    <span><span class="label">상태:</span> <span id="ws-status" class="connecting">연결 중...</span></span>
+    <span><span class="label">내 ID:</span> <span id="my-id">-</span></span>
+    <span id="user-list"></span>
+    <button id="toggle-log" style="margin-left: 8px; padding: 2px 8px; cursor: pointer;">로그</button>
+  </div>
+  
+  <iframe id="editor-frame" src="http://localhost:7700"></iframe>
+  
+  <div id="log-panel"></div>
+
+  <script>
+    // ─────────────────────────────────────────
+    // 설정
+    // ─────────────────────────────────────────
+    const urlParams = new URLSearchParams(location.search);
+    const ROOM_ID = urlParams.get('room') || 'default';
+    const POLL_INTERVAL = 2000; // 2초마다 로컬 편집 이벤트 수집
+    const WS_URL = `ws://${location.hostname}:7701/ws?room=${ROOM_ID}`;
+    
+    document.getElementById('room-id').textContent = ROOM_ID;
+    
+    // ─────────────────────────────────────────
+    // 로그 유틸
+    // ─────────────────────────────────────────
+    const logPanel = document.getElementById('log-panel');
+    function log(type, ...args) {
+      const msg = args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
+      console.log(`[${type}]`, ...args);
+      const entry = document.createElement('div');
+      entry.className = `log-entry ${type}`;
+      entry.textContent = `${new Date().toTimeString().substr(0, 8)} [${type}] ${msg}`;
+      logPanel.appendChild(entry);
+      logPanel.scrollTop = logPanel.scrollHeight;
+      while (logPanel.children.length > 100) logPanel.firstChild.remove();
+    }
+    
+    document.getElementById('toggle-log').onclick = () => {
+      logPanel.classList.toggle('visible');
+    };
+    
+    // ─────────────────────────────────────────
+    // 상태 관리
+    // ─────────────────────────────────────────
+    let ws = null;
+    let myClientId = null;
+    let pollTimer = null;
+    let isApplyingRemote = false;  // 원격 이벤트 적용 중 플래그 (루프 방지)
+    const activeUsers = new Map(); // clientId → 정보
+    
+    const iframe = document.getElementById('editor-frame');
+    
+    // ─────────────────────────────────────────
+    // rhwp-studio postMessage 통신 (Promise 래퍼)
+    // ─────────────────────────────────────────
+    let nextRequestId = 1;
+    const pendingRequests = new Map();
+    
+    function callRhwp(method, params = {}) {
+      return new Promise((resolve, reject) => {
+        const id = nextRequestId++;
+        pendingRequests.set(id, { resolve, reject });
+        
+        iframe.contentWindow.postMessage({
+          type: 'rhwp-request', id, method, params
+        }, '*');
+        
+        // 10초 타임아웃
+        setTimeout(() => {
+          if (pendingRequests.has(id)) {
+            pendingRequests.delete(id);
+            reject(new Error(`timeout: ${method}`));
+          }
+        }, 10000);
+      });
+    }
+    
+    window.addEventListener('message', (e) => {
+      if (e.data?.type !== 'rhwp-response') return;
+      const { id, result, error } = e.data;
+      const req = pendingRequests.get(id);
+      if (!req) return;
+      pendingRequests.delete(id);
+      if (error) req.reject(new Error(error));
+      else req.resolve(result);
+    });
+    
+    // ─────────────────────────────────────────
+    // WebSocket 연결
+    // ─────────────────────────────────────────
+    function connectWS() {
+      log('info', `WebSocket 연결 시도: ${WS_URL}`);
+      ws = new WebSocket(WS_URL);
+      
+      ws.onopen = () => {
+        log('info', 'WebSocket 연결됨');
+        updateWSStatus('connected', '연결됨');
+      };
+      
+      ws.onmessage = (e) => {
+        try {
+          const msg = JSON.parse(e.data);
+          handleServerMessage(msg);
+        } catch (err) {
+          log('err', 'JSON 파싱 실패', err.message);
+        }
+      };
+      
+      ws.onclose = () => {
+        log('info', 'WebSocket 연결 끊김');
+        updateWSStatus('disconnected', '연결 끊김');
+        // 3초 후 재연결 시도
+        setTimeout(connectWS, 3000);
+      };
+      
+      ws.onerror = (err) => {
+        log('err', 'WebSocket 에러', err);
+      };
+    }
+    
+    function updateWSStatus(cls, text) {
+      const el = document.getElementById('ws-status');
+      el.className = cls;
+      el.textContent = text;
+    }
+    
+    function sendToServer(message) {
+      if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(message));
+      }
+    }
+    
+    // ─────────────────────────────────────────
+    // 서버 메시지 처리
+    // ─────────────────────────────────────────
+    async function handleServerMessage(msg) {
+      log('recv', msg.type, msg);
+      
+      switch (msg.type) {
+        case 'welcome':
+          myClientId = msg.clientId;
+          document.getElementById('my-id').textContent = myClientId;
+          updateUserList(msg.memberCount);
+          break;
+          
+        case 'user-joined':
+          updateUserList(msg.memberCount);
+          break;
+          
+        case 'user-left':
+          updateUserList(msg.memberCount);
+          break;
+          
+        case 'edit-events':
+          await applyRemoteEvents(msg.events, msg.fromClientId);
+          break;
+      }
+    }
+    
+    function updateUserList(count) {
+      const list = document.getElementById('user-list');
+      list.innerHTML = `<span class="user-chip me">나 (${myClientId})</span>`;
+      for (let i = 1; i < count; i++) {
+        const chip = document.createElement('span');
+        chip.className = 'user-chip';
+        chip.textContent = `사용자 ${i}`;
+        list.appendChild(chip);
+      }
+    }
+    
+    // ─────────────────────────────────────────
+    // 원격 이벤트 적용
+    // ─────────────────────────────────────────
+    async function applyRemoteEvents(events, fromClientId) {
+      if (!events || events.length === 0) return;
+      log('recv', `📥 ${fromClientId}의 이벤트 ${events.length}개 적용 시작`);
+      
+      isApplyingRemote = true;
+      try {
+        // 원격 적용 직전 내 이벤트 버퍼 비우기 (내 것과 섞이지 않게)
+        await callRhwp('endBatch');
+        await callRhwp('beginBatch');
+
+        for (const evt of events) {
+          await applyEvent(evt);
+        }
+
+        //원격 적용 후 생긴 이벤트도 버리기 (재전송 방지)
+        await callRhwp('endBatch');
+        await callRhwp('beginBatch');
+
+        log('recv', `✅ 적용 완료`);
+      } catch (err) {
+        log('err', '이벤트 적용 실패', err.message);
+      } finally {
+        isApplyingRemote = false;
+      }
+    }
+    
+    async function applyEvent(evt) {
+      switch (evt.type) {
+        case 'TextInserted':
+          if (evt.text) {
+            await callRhwp('insertText', {
+              sec: evt.section,
+              para: evt.para,
+              charOffset: evt.offset,
+              text: evt.text,
+            });
+            log('recv', `  +"${evt.text}"`, `@${evt.section}/${evt.para}/${evt.offset}`);
+          } else {
+            log('recv', '  TextInserted (text 없음, 스킵)', evt);
+          }
+          break;
+          
+        case 'TextDeleted':
+          await callRhwp('deleteText', {
+            sec: evt.section,
+            para: evt.para,
+            charOffset: evt.offset,
+            count: evt.count,
+            text: evt.text,
+          });
+          log('recv', `  -"${evt.text || '?'}"`, `@${evt.section}/${evt.para}/${evt.offset}*${evt.count}`);
+          break;
+          
+        case 'ParagraphSplit':
+          await callRhwp('splitParagraph', {
+            sec: evt.section,
+            para: evt.para,
+            charOffset: evt.offset,
+          });
+          break;
+          
+        case 'ParagraphMerged':
+          await callRhwp('mergeParagraph', {
+            sec: evt.section,
+            para: evt.para,
+          });
+          break;
+          
+        default:
+          log('recv', `  (미지원 이벤트 타입: ${evt.type})`, evt);
+      }
+    }
+    
+    // ─────────────────────────────────────────
+    // 로컬 편집 이벤트 수집 & 전송
+    // ─────────────────────────────────────────
+    async function pollLocalEvents() {
+      if (isApplyingRemote) return; // 원격 적용 중엔 스킵
+      
+      try {
+        // endBatch로 이벤트 뽑아내기
+        const resultStr = await callRhwp('endBatch');
+        const result = JSON.parse(resultStr);
+        
+        if (result.ok && result.events && result.events.length > 0) {
+          log('send', `📤 로컬 편집 ${result.events.length}개 전송`);
+          sendToServer({
+            type: 'edit-events',
+            events: result.events,
+          });
+        }
+        
+        // 다음 배치 시작
+        await callRhwp('beginBatch');
+      } catch (err) {
+        log('err', '로컬 이벤트 수집 실패', err.message);
+      }
+    }
+    
+    // ─────────────────────────────────────────
+    // 초기화
+    // ─────────────────────────────────────────
+    async function initialize() {
+      // iframe 로드 대기
+      await new Promise(resolve => {
+        if (iframe.contentDocument?.readyState === 'complete') {
+          resolve();
+        } else {
+          iframe.addEventListener('load', resolve, { once: true });
+        }
+      });
+      
+      log('info', 'iframe 로드됨, rhwp-studio 준비 대기...');
+      
+      // rhwp-studio가 WASM 초기화할 시간 확보
+      for (let i = 0; i < 30; i++) {
+        try {
+          const ready = await callRhwp('ready');
+          if (ready) break;
+        } catch (err) {
+          // 아직 준비 안 됨
+        }
+        await new Promise(r => setTimeout(r, 500));
+      }
+      
+      log('info', 'rhwp-studio 준비 완료');
+
+      // 문서가 실제로 편집 가능할 때까지 대기 (beginBatch 성공 기준)
+      let batchStarted = false;
+      for (let i = 0; i < 60; i++) {
+        try {
+          await callRhwp('beginBatch');
+          batchStarted = true;
+          break; // beginBatch 성공 = 문서 준비됨
+        } catch (err) {
+          await new Promise(r => setTimeout(r, 500));
+        }
+      }
+
+      if (!batchStarted) {
+        log('err', '문서 준비 실패 (30초 초과)');
+        return;
+      }
+
+      log('info', '문서 준비 완료, 이벤트 수집 시작');
+      
+      // 이벤트 수집 시작
+      await callRhwp('beginBatch');
+      
+      // WebSocket 연결
+      connectWS();
+      
+      // 주기적 폴링 시작
+      pollTimer = setInterval(pollLocalEvents, POLL_INTERVAL);
+      
+      log('info', `초기화 완료. ${POLL_INTERVAL}ms마다 이벤트 수집`);
+    }
+    
+    initialize();
+  </script>
+</body>
+</html>
