@@ -1,0 +1,27 @@
+services:
+  rhwp-yjs:
+    image: node:20-alpine
+    container_name: rhwp-yjs
+    restart: unless-stopped
+    working_dir: /app
+    command: sh -c "npm install y-websocket@1.5.4 ws@^8.18.0 --no-audit --no-fund 2>&1 | tail -3; node /app/server.js"
+    ports:
+      - "1234:1234"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=1234
+      - YPERSISTENCE=/data
+      - TZ=Asia/Seoul
+    volumes:
+      - ./server.js:/app/server.js:ro
+      - rhwp-yjs-data:/data
+      - rhwp-yjs-node-modules:/app/node_modules
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:1234/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  rhwp-yjs-data:
+  rhwp-yjs-node-modules:

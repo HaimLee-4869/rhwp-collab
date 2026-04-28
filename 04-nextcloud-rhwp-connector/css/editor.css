@@ -1,0 +1,281 @@
+/* rHWP Editor - Nextcloud Integration v3.0 */
+
+#app-content {
+    height: 100%;
+    overflow: hidden !important;
+}
+
+#rhwp-container {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+#loading {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 16px;
+    z-index: 100;
+}
+
+#loading.hidden {
+    display: none !important;
+}
+
+.spinner {
+    width: 44px;
+    height: 44px;
+    border: 3px solid var(--color-background-darker, #e0e0e0);
+    border-top-color: var(--color-primary, #0082c9);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+#toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 16px;
+    background: var(--color-main-background, #fff);
+    border-bottom: 1px solid var(--color-border, #ededed);
+    flex-shrink: 0;
+}
+
+#close-btn {
+    padding: 6px 12px;
+    border: 1px solid var(--color-border, #ccc);
+    border-radius: var(--border-radius, 3px);
+    background: var(--color-main-background, #fff);
+    color: var(--color-main-text, #333);
+    font-size: 13px;
+    cursor: pointer;
+}
+
+#close-btn:hover {
+    background: var(--color-background-hover, #f5f5f5);
+}
+
+#save-btn {
+    padding: 6px 12px;
+    border: none;
+    border-radius: var(--border-radius, 3px);
+    background: var(--color-primary, #0082c9);
+    color: var(--color-primary-text, #fff);
+    font-size: 13px;
+    cursor: pointer;
+}
+
+#save-btn:hover {
+    background: var(--color-primary-hover, #006aa3);
+}
+
+#save-btn:disabled {
+    background: var(--color-background-darker, #ccc);
+    cursor: not-allowed;
+}
+
+#file-name {
+    font-size: 13px;
+    color: var(--color-main-text, #333);
+}
+
+/* ============================
+   협업 참여자 표시 (툴바)
+   ============================ */
+#user-list {
+    display: flex;
+    gap: 4px;
+    margin-left: auto;
+}
+
+.user-badge {
+    padding: 4px 10px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: default;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    transition: transform 0.2s;
+}
+
+.user-badge:hover {
+    transform: scale(1.05);
+}
+
+/* ============================
+   실시간 원격 커서 (OnlyOffice 스타일)
+   ============================ */
+#cursor-layer {
+    position: absolute;
+    top: 50px;  /* toolbar height */
+    left: 0;
+    right: 0;
+    bottom: 0;
+    pointer-events: none;
+    z-index: 50;
+    overflow: hidden;
+}
+
+.remote-cursor {
+    position: absolute;
+    transition: transform 0.1s ease-out, opacity 0.3s;
+    z-index: 51;
+}
+
+/* 커서 선 (세로 막대) */
+.cursor-caret {
+    width: 2px;
+    height: 18px;
+    border-radius: 1px;
+    animation: cursor-blink 1s ease-in-out infinite;
+}
+
+@keyframes cursor-blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+
+/* 커서 이름 라벨 */
+.cursor-label {
+    position: absolute;
+    top: -20px;
+    left: 0;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 11px;
+    font-weight: 500;
+    color: #fff;
+    white-space: nowrap;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+    transform: translateX(-50%);
+}
+
+/* 커서 포인터 (삼각형) */
+.cursor-pointer {
+    position: absolute;
+    top: -4px;
+    left: -3px;
+    width: 0;
+    height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top-width: 6px;
+    border-top-style: solid;
+}
+
+/* 선택 영역 하이라이트 */
+.remote-selection {
+    position: absolute;
+    opacity: 0.3;
+    pointer-events: none;
+}
+
+/* ============================
+   상태 표시
+   ============================ */
+#status {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    z-index: 200;
+    padding: 10px 20px;
+    border-radius: var(--border-radius, 4px);
+    font-size: 14px;
+    display: none;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+}
+
+#status.success {
+    display: block;
+    background: var(--color-success, #46ba61);
+    color: #fff;
+}
+
+#status.error {
+    display: block;
+    background: var(--color-error, #e9322d);
+    color: #fff;
+}
+
+#status.saving {
+    display: block;
+    background: var(--color-warning, #eca700);
+    color: #fff;
+}
+
+/* ============================
+   편집기 iframe
+   ============================ */
+#rhwp-editor {
+    flex: 1;
+    width: 100%;
+    border: none;
+    background: #f5f5f5;
+}
+
+/* ============================
+   Nextcloud 레이아웃 조정
+   ============================ */
+#content {
+    overflow: hidden !important;
+}
+
+#app-content {
+    overflow: hidden !important;
+}
+
+/* ============================
+   입력 중 알림 (typing indicator)
+   ============================ */
+.typing-indicator {
+    position: fixed;
+    bottom: 60px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(0,0,0,0.75);
+    color: #fff;
+    padding: 8px 16px;
+    border-radius: 20px;
+    font-size: 13px;
+    z-index: 150;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.typing-indicator .dots {
+    display: flex;
+    gap: 3px;
+}
+
+.typing-indicator .dot {
+    width: 6px;
+    height: 6px;
+    background: #fff;
+    border-radius: 50%;
+    animation: typing-bounce 1.4s infinite ease-in-out;
+}
+
+.typing-indicator .dot:nth-child(1) { animation-delay: 0s; }
+.typing-indicator .dot:nth-child(2) { animation-delay: 0.2s; }
+.typing-indicator .dot:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes typing-bounce {
+    0%, 80%, 100% { transform: translateY(0); opacity: 0.5; }
+    40% { transform: translateY(-4px); opacity: 1; }
+}

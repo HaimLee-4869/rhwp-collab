@@ -1,0 +1,149 @@
+services:
+  nextcloud-db:
+    image: postgres:16-alpine
+    container_name: nextcloud-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: nextcloud
+      POSTGRES_USER: nextcloud
+      POSTGRES_PASSWORD: Nextcloud_Secure_2026!
+    volumes:
+      - nextcloud-db:/var/lib/postgresql/data
+    networks:
+      - nextcloud-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nextcloud"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  nextcloud-redis:
+    image: redis:7-alpine
+    container_name: nextcloud-redis
+    restart: unless-stopped
+    command: redis-server --requirepass Redis_NC_2026!
+    volumes:
+      - nextcloud-redis:/data
+    networks:
+      - nextcloud-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "Redis_NC_2026!", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  nextcloud:
+    image: nextcloud:30-apache
+    container_name: nextcloud
+    restart: unless-stopped
+    depends_on:
+      nextcloud-db:
+        condition: service_healthy
+      nextcloud-redis:
+        condition: service_healthy
+    environment:
+      # Database
+      POSTGRES_HOST: nextcloud-db
+      POSTGRES_DB: nextcloud
+      POSTGRES_USER: nextcloud
+      POSTGRES_PASSWORD: Nextcloud_Secure_2026!
+      # Redis
+      REDIS_HOST: nextcloud-redis
+      REDIS_HOST_PASSWORD: Redis_NC_2026!
+      # Nextcloud
+      NEXTCLOUD_ADMIN_USER: admin
+      NEXTCLOUD_ADMIN_PASSWORD: JB_Admin_2026!
+      NEXTCLOUD_TRUSTED_DOMAINS: "ai.jb.go.kr localhost 192.168.0.8"
+      OVERWRITEPROTOCOL: https
+      OVERWRITECLIURL: https://ai.jb.go.kr/nextcloud
+      OVERWRITEWEBROOT: /nextcloud
+      # PHP tuning
+      PHP_MEMORY_LIMIT: 1G
+      PHP_UPLOAD_LIMIT: 10G
+    volumes:
+      - nextcloud-data:/var/www/html
+      - nextcloud-apps:/var/www/html/custom_apps
+      - nextcloud-config:/var/www/html/config
+    ports:
+      - "127.0.0.1:8085:80"
+    networks:
+      - nextcloud-net
+      - jeonbuk-ai
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost/status.php"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  nextcloud-sso:
+    build: ./nextcloud-sso
+    container_name: nextcloud-sso
+    restart: unless-stopped
+    environment:
+      WEBUI_SECRET_KEY: "Goo8LIEmvdkkkOHO"
+    networks:
+      - jeonbuk-ai
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8099/health')\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  onlyoffice:
+    image: onlyoffice/documentserver:8.1
+    container_name: onlyoffice
+    restart: unless-stopped
+    entrypoint: ["/bin/bash", "-c", "chmod 600 /etc/ssl/private/ssl-cert-snakeoil.key 2>/dev/null || true; sed -i 's/ssl = on/ssl = off/' /etc/postgresql/14/main/postgresql.conf 2>/dev/null || true; (sleep 70 && chown -R ds:ds /var/lib/onlyoffice /var/log/onlyoffice && chown -R www-data:www-data /var/www/onlyoffice && chmod -R 777 /var/lib/onlyoffice/documentserver/App_Data/cache && sed -i 's/set \\$secure_link_secret [^;]*/set \\$secure_link_secret verysecretstring/' /etc/onlyoffice/documentserver/nginx/ds.conf 2>/dev/null && python3 -c \"import json; f='/etc/onlyoffice/documentserver/local.json'; d=json.load(open(f)); d['services']['CoAuthoring']['token']['enable']={'browser':False,'request':{'inbox':True,'outbox':False}}; d['services']['CoAuthoring']['token']['inbox']={'header':'Authorization','prefix':'Bearer ','inBody':False}; d['services']['CoAuthoring']['token']['outbox']={'header':'Authorization','prefix':'Bearer ','algorithm':'HS256','expires':'5m','inBody':False,'urlExclusionRegex':''}; d['services']['CoAuthoring']['requestDefaults']={'rejectUnauthorized':False}; d['services']['CoAuthoring']['request-filtering-agent']={'allowPrivateIPAddress':True}; d['ipfilter']={'rules':[{'address':'*','allowed':True}],'useforrequest':True,'errorcode':403}; d['storage']={'fs':{'secretString':'verysecretstring'}}; json.dump(d,open(f,'w'),indent=2); print('Config updated')\" && chmod 644 /etc/onlyoffice/documentserver/local.json && supervisorctl restart all && nginx -s reload && echo 'Services restarted') & exec /app/ds/run-document-server.sh"]
+    environment:
+      # Allow private IP addresses (Docker internal network)
+      ALLOW_PRIVATE_IP_ADDRESS: "true"
+      # JWT Authentication
+      JWT_ENABLED: "true"
+      JWT_SECRET: "JB_OnlyOffice_JWT_Secret_2026!"
+      JWT_HEADER: "Authorization"
+      JWT_IN_BODY: "false"
+      # Database - use embedded
+      DB_TYPE: "postgres"
+      DB_HOST: "localhost"
+      DB_PORT: "5432"
+      DB_NAME: "onlyoffice"
+      DB_USER: "onlyoffice"
+      DB_PWD: "onlyoffice"
+      # RabbitMQ - use embedded
+      AMQP_TYPE: "rabbitmq"
+      AMQP_URI: "amqp://guest:guest@localhost"
+      # Redis - use embedded
+      REDIS_SERVER_HOST: "localhost"
+      REDIS_SERVER_PORT: "6379"
+      # Performance
+      DS_LOG_LEVEL: "WARN"
+    volumes:
+      - onlyoffice-data:/var/www/onlyoffice/Data
+      - onlyoffice-logs:/var/log/onlyoffice
+      - onlyoffice-fonts:/var/www/onlyoffice/fonts
+    ports:
+      - "127.0.0.1:8087:80"
+    networks:
+      - nextcloud-net
+      - jeonbuk-ai
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost/healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  nextcloud-net:
+    driver: bridge
+  jeonbuk-ai:
+    external: true
+
+volumes:
+  nextcloud-db:
+  nextcloud-redis:
+  nextcloud-data:
+  nextcloud-apps:
+  nextcloud-config:
+  onlyoffice-data:
+  onlyoffice-logs:
+  onlyoffice-fonts:
